@@ -474,6 +474,12 @@ pub fn load_wordlist(path: &Path) -> io::Result<Vec<String>> {
     Ok(f.lines().map(|line| line.unwrap()).collect())
 }
 
+pub fn load_dict(path: &Path) -> io::Result<Dict> {
+    let wordlist = load_wordlist(path).unwrap();
+    let wordlist: Vec<_> = wordlist.iter().map(|w| &w[..]).collect();
+    return Ok(create_prefix_tree(&wordlist))
+}
+
 #[cfg(test)]
 mod tests {
     use Wordcut;
@@ -529,10 +535,8 @@ mod tests {
         let path = super::Path::new(
             concat!(env!("CARGO_MANIFEST_DIR"),
                     "/data/thai2words.txt"));
-        let v = super::load_wordlist(path).unwrap();
-        let v: Vec<_> = v.iter().map(|w| &w[..]).collect();
-        let dict = super::create_prefix_tree(&v);
-        let wordcut = Wordcut::new(dict);
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new(dict.unwrap());
         assert_eq!(wordcut.put_delimiters("กากกา", "|"),
                    String::from("กาก|กา"))        
     }
