@@ -1,0 +1,9 @@
+[package]
+name = "wordcut-engine"
+version = "0.1.0"
+authors = ["Vee Satayamas <vsatayamas@gmail.com>"]
+
+[dependencies]
+prefixtree = "0.1.3"
+lazy_static = "0.2.2"
+
