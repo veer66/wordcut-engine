@@ -1,6 +1,6 @@
 [package]
 name = "wordcut-engine"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Vee Satayamas <vsatayamas@gmail.com>"]
 description = "Word segmentation/breaking library"
 homepage = "https://github.com/veer66/wordcut-engine"

@@ -9,7 +9,7 @@ use std::io;
 use std::fs::File;
 use std::io::BufRead;
 
-type Dict = PrefixTree<char, bool>;
+pub type Dict = PrefixTree<char, bool>;
 
 pub fn create_prefix_tree(words: &[&str]) -> PrefixTree<char, bool> {
     let words_payloads: Vec<(&str, bool)> =
