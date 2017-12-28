@@ -401,6 +401,97 @@ pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
 
     return path
 }
+#[derive(Debug, PartialEq, Eq)]
+pub struct DagEdge {
+    pub s: usize,
+    pub e: usize,
+    pub etype: EdgeType
+}
+
+pub type Dag = Vec<Vec<DagEdge>>;
+
+pub trait DagEdgeBuilder {
+    fn build_dag_edges(&mut self, context: &EdgeBuildingContext) -> Vec<DagEdge>;
+}
+
+impl<'a> DagEdgeBuilder for DictEdgeBuilder<'a> {
+    fn build_dag_edges(&mut self, context: &EdgeBuildingContext) -> Vec<DagEdge> {
+        self.add_pointer(context);
+        self.update_pointers(context);
+        //self.gen_edge(&self.pointers, path)
+        self.pointers
+            .iter()
+            .filter(|p| p.is_final)
+            .map(|p| DagEdge {s: p.s, e: context.i + 1, etype: EdgeType::Dict})
+            .collect()
+    }
+}
+
+impl DagEdgeBuilder for PatEdgeBuilder {
+    fn build_dag_edges(&mut self, context: &EdgeBuildingContext) -> Vec<DagEdge> {
+        let next_char = if context.i + 1 == context.text.len() {
+            None
+        } else {
+            Some(context.text[context.i + 1])
+        };
+        self.transit(context.ch, next_char);
+        if self.is_pat_final() {
+            vec![DagEdge {
+                s: self.start,
+                e: context.i + 1,
+                etype: self.etype
+            }]
+        } else {
+            vec![]
+        }
+    }
+}
+
+
+pub fn build_dag(dict: &Dict, text: &Vec<char>) -> Dag {
+    let mut builders: Vec<Box<DagEdgeBuilder>> =
+        vec![Box::new(DictEdgeBuilder::new(dict)),
+             Box::new(create_latin_edge_builder()),
+             Box::new(create_punc_edge_builder())
+        ];
+    
+    let mut dag = Vec::with_capacity(text.len() + 1);
+
+    for _ in 0..text.len()+1 {
+        dag.push(vec![]);
+    }
+    dag[0].push(DagEdge{s: 0, e: 0, etype: EdgeType::Init});
+    let mut context = EdgeBuildingContext {
+        text: &text,
+        i: 0,
+        ch: '\0',
+        left_boundary: 0,
+        best_edge: None,
+    };
+
+    for i in 0..text.len() {
+        context.ch = text[i];
+        context.i = i;
+        context.best_edge = None;
+
+        for builder in &mut builders {
+            for edge in builder.build_dag_edges(&context) {
+                dag[edge.e].push(edge)
+            }
+        }
+    }
+
+    let mut left_boundary = 0;
+    for i in 1..text.len()+1 {
+        if dag[i].len() == 0 {
+            dag[i].push(DagEdge {s: left_boundary, e: i, etype: EdgeType::Unk});
+        } else {
+            left_boundary = i;
+        }
+    }
+
+    return dag
+}
 
 #[derive(Debug, PartialEq)]
 pub struct TextRange {
@@ -484,6 +575,9 @@ pub fn load_dict(path: &Path) -> io::Result<Dict> {
 mod tests {
     use Wordcut;
     use TextRange;
+    use DagEdge;
+    use EdgeType;
+    
     #[test]
     fn test_prefix_tree() {
         let prefix_tree = super::create_prefix_tree(&["A"]);
@@ -541,4 +635,70 @@ mod tests {
                    String::from("กาก|กา"))        
     }
 
+    #[test]
+    fn test_dag() {
+        let path = super::Path::new(
+            concat!(env!("CARGO_MANIFEST_DIR"),
+                    "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let dag = super::build_dag(&dict.unwrap(), &"กากกา".chars().collect());
+        let expected = vec![
+            vec![DagEdge{s: 0, e: 0, etype: EdgeType::Init  }],    // 0
+            vec![DagEdge{s: 0, e: 1, etype: EdgeType::Unk   }],    // 1
+            vec![DagEdge{s: 0, e: 2, etype: EdgeType::Dict  }],    // 2
+            vec![DagEdge{s: 0, e: 3, etype: EdgeType::Dict  }],    // 3
+            vec![DagEdge{s: 3, e: 4, etype: EdgeType::Unk   }],    // 4
+            vec![DagEdge{s: 3, e: 5, etype: EdgeType::Dict  }]     // 5
+        ];
+        assert_eq!(dag, expected);
+    }
+
+    #[test]
+    fn test_dag_punc() {
+        let path = super::Path::new(
+            concat!(env!("CARGO_MANIFEST_DIR"),
+                    "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let dag = super::build_dag(&dict.unwrap(), &"กา กา".chars().collect());
+        let expected = vec![
+            vec![DagEdge{s: 0, e: 0, etype: EdgeType::Init  }],    // 0
+            vec![DagEdge{s: 0, e: 1, etype: EdgeType::Unk   }],    // 1
+            vec![DagEdge{s: 0, e: 2, etype: EdgeType::Dict  }],    // 2
+            vec![DagEdge{s: 2, e: 3, etype: EdgeType::Punc  }],    // 3
+            vec![DagEdge{s: 3, e: 4, etype: EdgeType::Unk   }],    // 4
+            vec![DagEdge{s: 3, e: 5, etype: EdgeType::Dict  }]     // 5
+        ];
+        assert_eq!(dag, expected);
+    }
+
+    #[test]
+    fn test_dag_latin() {
+        let path = super::Path::new(
+            concat!(env!("CARGO_MANIFEST_DIR"),
+                    "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let dag = super::build_dag(&dict.unwrap(), &"กาAB".chars().collect());
+        let expected = vec![
+            vec![DagEdge{s: 0, e: 0, etype: EdgeType::Init  }],    // 0
+            vec![DagEdge{s: 0, e: 1, etype: EdgeType::Unk   }],    // 1
+            vec![DagEdge{s: 0, e: 2, etype: EdgeType::Dict  }],    // 2
+            vec![DagEdge{s: 2, e: 3, etype: EdgeType::Unk   }],    // 3
+            vec![DagEdge{s: 2, e: 4, etype: EdgeType::Latin }]     // 4
+        ];
+        assert_eq!(dag, expected);
+    }
+
+    #[test]
+    fn test_dag_empty() {
+        let path = super::Path::new(
+            concat!(env!("CARGO_MANIFEST_DIR"),
+                    "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let dag = super::build_dag(&dict.unwrap(), &"".chars().collect());
+        let expected = vec![
+            vec![DagEdge{s: 0, e: 0, etype: EdgeType::Init  }]    // 0
+        ];
+        assert_eq!(dag, expected);
+
+    }    
 }
