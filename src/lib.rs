@@ -559,6 +559,12 @@ impl Wordcut {
     pub fn put_delimiters(&self, text: &str, delim: &str) -> String {
         self.segment_into_strings(text).join(delim)
     }
+
+    #[allow(dead_code)]
+    pub fn build_dag(&self, text: &str) -> Dag {
+        build_dag(&self.dict, &text.chars().collect())
+    }
+
 }
 
 pub fn load_wordlist(path: &Path) -> io::Result<Vec<String>> {
@@ -640,6 +646,25 @@ mod tests {
 
     #[test]
     fn test_dag() {
+        let path = super::Path::new(
+            concat!(env!("CARGO_MANIFEST_DIR"),
+                    "/data/thai2words.txt"));
+        let dict = super::load_dict(&path).unwrap();
+        let wordcut = Wordcut::new(dict);
+        let dag = wordcut.build_dag("กากกา");
+        let expected = vec![
+            vec![DagEdge{s: 0, e: 0, etype: EdgeType::Init  }],    // 0
+            vec![DagEdge{s: 0, e: 1, etype: EdgeType::Unk   }],    // 1
+            vec![DagEdge{s: 0, e: 2, etype: EdgeType::Dict  }],    // 2
+            vec![DagEdge{s: 0, e: 3, etype: EdgeType::Dict  }],    // 3
+            vec![DagEdge{s: 3, e: 4, etype: EdgeType::Unk   }],    // 4
+            vec![DagEdge{s: 3, e: 5, etype: EdgeType::Dict  }]     // 5
+        ];
+        assert_eq!(dag, expected);
+    }
+
+        #[test]
+    fn test_dag_in_object() {
         let path = super::Path::new(
             concat!(env!("CARGO_MANIFEST_DIR"),
                     "/data/thai2words.txt"));
