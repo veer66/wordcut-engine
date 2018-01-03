@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate lazy_static;
 extern crate prefixtree;
+#[macro_use]
+extern crate serde_derive;
 
 use self::prefixtree::{PrefixTree, prefix_tree_from_str};
 use std::collections::HashSet;
@@ -18,7 +20,7 @@ pub fn create_prefix_tree(words: &[&str]) -> PrefixTree<char, bool> {
     prefix_tree_from_str(&words_payloads[..])
 }
 
-#[derive(Clone, PartialEq, Eq, Copy, Debug)]
+#[derive(Clone, PartialEq, Eq, Copy, Debug, Serialize, Deserialize)]
 pub enum EdgeType {
     Init,
     Dict,
@@ -27,7 +29,7 @@ pub enum EdgeType {
     Latin
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Edge {
     pub w: usize,
     pub unk: usize,
@@ -401,7 +403,7 @@ pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
 
     return path
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagEdge {
     pub s: usize,
     pub e: usize,
@@ -493,7 +495,7 @@ pub fn build_dag(dict: &Dict, text: &Vec<char>) -> Dag {
     return dag
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextRange {
     pub s: usize,
     pub e: usize,
@@ -573,6 +575,7 @@ pub fn load_dict(path: &Path) -> io::Result<Dict> {
 
 #[cfg(test)]
 mod tests {
+    extern crate serde_json;
     use Wordcut;
     use TextRange;
     use DagEdge;
@@ -700,5 +703,14 @@ mod tests {
         ];
         assert_eq!(dag, expected);
 
-    }    
+    }
+
+    #[test]
+    fn test_dag_to_json() {
+        let dag = vec![
+            vec![DagEdge{s: 0, e: 0, etype: EdgeType::Init  }]    // 0
+        ];
+        let s = serde_json::to_string(&dag).unwrap();
+        assert_eq!(s, "[[{\"s\":0,\"e\":0,\"etype\":\"Init\"}]]");
+    }
 }
