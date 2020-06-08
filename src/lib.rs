@@ -246,7 +246,7 @@ pub struct UnkEdgeBuilder {
 
 impl UnkEdgeBuilder {
     pub fn new() -> UnkEdgeBuilder {
-        UnkEdgeBuilder{}
+        UnkEdgeBuilder { }
     }
 }
 
@@ -520,6 +520,23 @@ pub fn path_to_ranges(path: &[Edge]) -> Vec<TextRange> {
     return ranges
 }
 
+pub fn path_to_byte_ranges(path: &[Edge], text: &[char]) -> Vec<TextRange> {
+    let char_ranges = path_to_ranges(path);
+    let mut ranges: Vec<TextRange> = Vec::with_capacity(char_ranges.len());
+    let mut global_byte_offset = 0;
+    for r in char_ranges {
+	let mut word_byte_offset = 0;
+	for i in r.s..r.e {
+	    word_byte_offset += text[i].len_utf8();
+	}
+        ranges.push(TextRange { s: global_byte_offset,
+				e: global_byte_offset + word_byte_offset });
+	global_byte_offset += word_byte_offset;
+
+    }
+    return ranges
+}
+
 pub fn path_to_str_vec(path: &[Edge], text: &[char]) -> Vec<String> {
     let ranges = path_to_ranges(path);
     let mut str_vec: Vec<String> = Vec::with_capacity(ranges.len());
@@ -548,6 +565,12 @@ impl Wordcut {
         let text: Vec<char> = text.chars().collect();
         let path = build_path(&self.dict, &text);
         return path_to_ranges(&path)
+    }
+
+    pub fn segment_into_byte_ranges(&self, text: &str) -> Vec<TextRange> {
+        let text: Vec<char> = text.chars().collect();
+        let path = build_path(&self.dict, &text);
+	return path_to_byte_ranges(&path, &text)
     }
 
     pub fn segment_into_strings(&self, text: &str) -> Vec<String> {
@@ -602,6 +625,15 @@ mod tests {
         let wordcut = Wordcut::new(dict);
         let ranges = wordcut.segment("กากกา");
         let expected = vec![TextRange{s:0,e:3}, TextRange{s:3,e:5}];
+        assert_eq!(ranges, expected)
+    }
+
+    #[test]
+    fn test_segment_into_byte_ranges() {
+        let dict = super::create_prefix_tree(&["กา","กาก"]);
+        let wordcut = Wordcut::new(dict);
+        let ranges = wordcut.segment_into_byte_ranges("กากกา");
+        let expected = vec![TextRange{s:0,e:9}, TextRange{s:9,e:15}];
         assert_eq!(ranges, expected)
     }
 
