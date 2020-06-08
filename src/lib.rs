@@ -86,7 +86,7 @@ enum State {
     NonPatFinal,
 }
 
-type CharPredicate = Fn(char) -> bool;
+type CharPredicate = dyn Fn(char) -> bool;
 
 pub struct PatEdgeBuilder {
     i: usize,
@@ -354,7 +354,7 @@ impl<'a> EdgeBuilder for DictEdgeBuilder<'a> {
 }
 
 pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
-    let mut builders: Vec<Box<EdgeBuilder>> = vec![
+    let mut builders: Vec<Box<dyn EdgeBuilder>> = vec![
         Box::new(DictEdgeBuilder::new(dict)),
         Box::new(create_latin_edge_builder()),
         Box::new(create_punc_edge_builder()),
@@ -453,7 +453,7 @@ impl DagEdgeBuilder for PatEdgeBuilder {
 }
 
 pub fn build_dag(dict: &Dict, text: &Vec<char>) -> Dag {
-    let mut builders: Vec<Box<DagEdgeBuilder>> = vec![
+    let mut builders: Vec<Box<dyn DagEdgeBuilder>> = vec![
         Box::new(DictEdgeBuilder::new(dict)),
         Box::new(create_latin_edge_builder()),
         Box::new(create_punc_edge_builder()),
