@@ -6,7 +6,7 @@ description = "Word segmentation/breaking library"
 homepage = "https://github.com/veer66/wordcut-engine"
 repository = "https://github.com/veer66/wordcut-engine"
 keywords = ["text", "nlp", "library"]
-license = "MIT"
+license = "LGPL-3.0"
 
 [dependencies]
 prefixtree = "0.1.3"
