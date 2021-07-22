@@ -10,8 +10,20 @@ use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
+use fancy_regex::Regex;
+use thiserror::Error;
 
 pub type Dict = PrefixTree<char, bool>;
+
+#[derive(Error, Debug)]
+pub enum WordcutError {
+    #[error("Cannot open cluster rules at `{0}`")]
+    CannotOpenClusterRulesAt(String),
+    #[error("Cannot read a cluster rule")]
+    CannotReadClusterRule,
+    #[error("Cannot compile cluster rules `{0}`")]
+    CannotCompileClusterRules(String),
+}
 
 pub fn create_prefix_tree(words: &[&str]) -> PrefixTree<char, bool> {
     let words_payloads: Vec<(&str, bool)> = words.iter().map(|&word| (word, true)).collect();
@@ -174,8 +186,9 @@ pub trait EdgeBuilder {
     fn build(&mut self, context: &EdgeBuildingContext, path: &[Edge]) -> Option<Edge>;
 }
 
+#[derive(Debug)]
 pub struct EdgeBuildingContext<'a> {
-    pub text: &'a Vec<char>,
+    pub text: &'a [char],
     pub i: usize,
     pub ch: char,
     pub left_boundary: usize,
@@ -353,6 +366,77 @@ impl<'a> EdgeBuilder for DictEdgeBuilder<'a> {
     }
 }
 
+fn build_path_with_clusters(dict: &Dict, clusters: &[TextRange], text: &[char]) -> Vec<Edge> {
+    let mut builders: Vec<Box<dyn EdgeBuilder>> = vec![
+        Box::new(DictEdgeBuilder::new(dict)),
+        Box::new(create_latin_edge_builder()),
+        Box::new(create_punc_edge_builder()),
+        Box::new(UnkEdgeBuilder::new()),
+    ];
+
+    let mut path = vec![];
+    path.push(Edge {
+        w: 0,
+        unk: 0,
+        p: 0,
+        etype: EdgeType::Init,
+    });
+
+    let mut context = EdgeBuildingContext {
+        text,
+        i: 0,
+        ch: '\0',
+        left_boundary: 0,
+        best_edge: None,
+    };
+
+    let mut clusters = clusters.iter();
+    for i in 0..text.len() {
+        context.ch = text[i];
+        context.i = i;
+        context.best_edge = None;
+
+        for builder in &mut builders {
+            let edge = builder.build(&context, &path);
+            if Edge::better(&edge, &context.best_edge) {
+                context.best_edge = edge
+            }
+        }
+
+        if context.best_edge.is_none() {
+            panic!("Best edge cannot be None")
+        }
+
+        path.push(context.best_edge.unwrap());
+
+        let mut cluster = clusters.next();
+        if !context.best_edge.unwrap().is_unk() {            
+            while !match cluster {
+                Some(c) => {
+                    i < c.e
+                }
+                None => true,
+            } {
+                cluster = clusters.next();
+            }
+            match cluster {
+                Some(c) => {
+                    if i >= c.s && i < c.e {
+                        
+                    } else {
+                        context.left_boundary = i + 1;
+                    }
+                },
+                None => {
+                    context.left_boundary = i + 1;
+                }
+            }
+        }
+    }
+
+    return path;
+}
+
 pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
     let mut builders: Vec<Box<dyn EdgeBuilder>> = vec![
         Box::new(DictEdgeBuilder::new(dict)),
@@ -402,6 +486,7 @@ pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
 
     return path;
 }
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagEdge {
     pub s: usize,
@@ -564,30 +649,50 @@ pub fn path_to_str_vec(path: &[Edge], text: &[char]) -> Vec<String> {
 #[derive(Clone)]
 pub struct Wordcut {
     dict: Dict,
+    cluster_re: Option<Regex>,
 }
 
 impl Wordcut {
     pub fn new(dict: Dict) -> Wordcut {
-        Wordcut { dict: dict }
+        Wordcut { dict, cluster_re: None }
     }
 
+    pub fn new_with_cluster_re(dict: Dict, cluster_re: Regex) -> Wordcut {
+        Wordcut { dict, cluster_re: Some(cluster_re) }
+    }
+
+    #[inline]
+    pub fn build_path(&self, text: &str, text_chars: &[char]) -> Vec<Edge> {
+        match &self.cluster_re {
+            Some(cluster_re) => {
+                let clusters = find_clusters(text, cluster_re);
+                build_path_with_clusters(&self.dict, &clusters, text_chars)
+
+            },
+            None => {
+                let text_chars: Vec<char> = text.chars().collect();
+                build_path(&self.dict, &text_chars)
+            }
+        }
+    }
+    
     #[allow(dead_code)]
     pub fn segment(&self, text: &str) -> Vec<TextRange> {
-        let text: Vec<char> = text.chars().collect();
-        let path = build_path(&self.dict, &text);
-        return path_to_ranges(&path);
+        let text_chars: Vec<char> = text.chars().collect();
+        let path = self.build_path(text, &text_chars);
+        path_to_ranges(&path)
     }
 
     pub fn segment_into_byte_ranges(&self, text: &str) -> Vec<TextRange> {
-        let text: Vec<char> = text.chars().collect();
-        let path = build_path(&self.dict, &text);
-        return path_to_byte_ranges(&path, &text);
+        let text_chars: Vec<char> = text.chars().collect();
+        let path = self.build_path(text, &text_chars);
+        return path_to_byte_ranges(&path, &text_chars);
     }
 
     pub fn segment_into_strings(&self, text: &str) -> Vec<String> {
-        let text: Vec<char> = text.chars().collect();
-        let path = build_path(&self.dict, &text);
-        return path_to_str_vec(&path, &text);
+        let text_chars: Vec<char> = text.chars().collect();
+        let path = self.build_path(text, &text_chars);
+        return path_to_str_vec(&path, &text_chars);
     }
 
     pub fn put_delimiters(&self, text: &str, delim: &str) -> String {
@@ -598,6 +703,26 @@ impl Wordcut {
     pub fn build_dag(&self, text: &str) -> Dag {
         build_dag(&self.dict, &text.chars().collect())
     }
+}
+
+pub fn find_clusters(text: &str, cluster_re: &Regex) -> Vec<TextRange> {
+    let mut byte_to_char_map = vec![];
+    let mut i = 0;
+    for b in text.as_bytes() {
+        if (*b as i8) >= -0x40 {
+            byte_to_char_map.push(i);
+            i += 1;
+        } else {
+            byte_to_char_map.push(0);
+        }
+    }
+    byte_to_char_map.push(i);
+    cluster_re.find_iter(text)
+        .filter_map (|m|
+                     m.map(|m|
+                           TextRange {s: byte_to_char_map[m.start()],
+                                      e: byte_to_char_map[m.end()]}).ok())
+        .collect()
 }
 
 pub fn load_wordlist(path: &Path) -> io::Result<Vec<String>> {
@@ -612,9 +737,24 @@ pub fn load_dict(path: &Path) -> io::Result<Dict> {
     return Ok(create_prefix_tree(&wordlist));
 }
 
+pub fn load_cluster_rules(path: &Path) -> Result<Regex, WordcutError> {
+    let f = File::open(path).map_err(|_| WordcutError::CannotOpenClusterRulesAt(path.to_string_lossy().to_string()))?;
+    let f = io::BufReader::new(f);
+    let mut rules = vec![];
+    for line in f.lines() {
+        let line = line.map_err(|_| WordcutError::CannotReadClusterRule)?;
+        rules.push(line.trim().to_string());
+    }
+    let rules = rules.join("|");
+    let re = Regex::new(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?;
+    Ok(re)
+}
+
 #[cfg(test)]
 mod tests {
     extern crate serde_json;
+    use super::*;
+    
     use DagEdge;
     use EdgeType;
     use TextRange;
@@ -862,4 +1002,35 @@ mod tests {
         let s = serde_json::to_string(&dag).unwrap();
         assert_eq!(s, "[[{\"s\":0,\"e\":0,\"etype\":\"Init\"}]]");
     }
+
+    #[test]
+    fn test_thai_cluster_rules() {
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai_cluster_rules.txt"));
+        let cluster_re = super::load_cluster_rules(&path).unwrap();
+        let clusters = cluster_re.find_iter("มาการ์").collect::<Vec<_>>();        
+        assert_eq!(clusters.len(), 3);
+    }
+
+    #[test]
+    fn test_find_clusters() {
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai_cluster_rules.txt"));
+        let cluster_re = super::load_cluster_rules(&path).unwrap();
+        let clusters = find_clusters("กาแกกก์A", &cluster_re);
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0], TextRange {s:0, e:2});
+        assert_eq!(clusters[1], TextRange {s:2, e:7});
+    }
+
+    #[test]
+    fn test_wordcut_with_clusters() {
+        let text = "กาแกกก์แมกาก";
+        let cluster_path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai_cluster_rules.txt"));
+        let cluster_re = super::load_cluster_rules(&cluster_path).unwrap();
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new_with_cluster_re(dict.unwrap(), cluster_re);
+        assert_eq!(wordcut.put_delimiters(text, "|||"), String::from("กา|||แกกก์แม|||กาก"));
+
+    }
+
 }
