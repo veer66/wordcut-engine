@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
-use fancy_regex::Regex;
+use regex_automata::Regex;
 use thiserror::Error;
 
 pub type Dict = PrefixTree<char, bool>;
@@ -366,7 +366,7 @@ impl<'a> EdgeBuilder for DictEdgeBuilder<'a> {
     }
 }
 
-fn build_path_with_clusters(dict: &Dict, clusters: &[TextRange], text: &[char]) -> Vec<Edge> {
+fn build_path_with_clusters(dict: &Dict, clusters: &[usize], text: &[char]) -> Vec<Edge> {
     let mut builders: Vec<Box<dyn EdgeBuilder>> = vec![
         Box::new(DictEdgeBuilder::new(dict)),
         Box::new(create_latin_edge_builder()),
@@ -390,47 +390,30 @@ fn build_path_with_clusters(dict: &Dict, clusters: &[TextRange], text: &[char]) 
         best_edge: None,
     };
 
-    let mut clusters = clusters.iter();
-    for i in 0..text.len() {
+    let text_len = text.len();
+    for i in 0..text_len {
         context.ch = text[i];
         context.i = i;
         context.best_edge = None;
 
         for builder in &mut builders {
             let edge = builder.build(&context, &path);
-            if Edge::better(&edge, &context.best_edge) {
+            let mut skip_edge = false;
+            if let Some(edge) = edge {
+                let s = edge.p;
+                let e = i + 1;
+                skip_edge = !edge.is_unk() && !((s == 0 || clusters[s] == 0 || clusters[s] != clusters[s - 1]) &&
+                                                (e == text_len || clusters[e-1] == 0 || clusters[e] != clusters[e - 1]));
+            }
+            if !skip_edge && Edge::better(&edge, &context.best_edge) {
                 context.best_edge = edge
             }
         }
 
-        if context.best_edge.is_none() {
-            panic!("Best edge cannot be None")
-        }
-
         path.push(context.best_edge.unwrap());
-
-        let mut cluster = clusters.next();
-        if !context.best_edge.unwrap().is_unk() {            
-            while !match cluster {
-                Some(c) => {
-                    i < c.e
-                }
-                None => true,
-            } {
-                cluster = clusters.next();
-            }
-            match cluster {
-                Some(c) => {
-                    if i >= c.s && i < c.e {
-                        
-                    } else {
-                        context.left_boundary = i + 1;
-                    }
-                },
-                None => {
-                    context.left_boundary = i + 1;
-                }
-            }
+       
+        if !context.best_edge.unwrap().is_unk() {
+            context.left_boundary = i + 1;
         }
     }
 
@@ -472,11 +455,7 @@ pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
                 context.best_edge = edge
             }
         }
-
-        if context.best_edge.is_none() {
-            panic!("Best edge cannot be None")
-        }
-
+              
         path.push(context.best_edge.unwrap());
 
         if !context.best_edge.unwrap().is_unk() {
@@ -665,7 +644,7 @@ impl Wordcut {
     pub fn build_path(&self, text: &str, text_chars: &[char]) -> Vec<Edge> {
         match &self.cluster_re {
             Some(cluster_re) => {
-                let clusters = find_clusters(text, cluster_re);
+                let clusters = find_clusters(text, cluster_re, text_chars.len());
                 build_path_with_clusters(&self.dict, &clusters, text_chars)
 
             },
@@ -705,7 +684,7 @@ impl Wordcut {
     }
 }
 
-pub fn find_clusters(text: &str, cluster_re: &Regex) -> Vec<TextRange> {
+pub fn find_clusters(text: &str, cluster_re: &Regex, len: usize) -> Vec<usize> {
     let mut byte_to_char_map = vec![];
     let mut i = 0;
     for b in text.as_bytes() {
@@ -717,12 +696,19 @@ pub fn find_clusters(text: &str, cluster_re: &Regex) -> Vec<TextRange> {
         }
     }
     byte_to_char_map.push(i);
-    cluster_re.find_iter(text)
-        .filter_map (|m|
-                     m.map(|m|
-                           TextRange {s: byte_to_char_map[m.start()],
-                                      e: byte_to_char_map[m.end()]}).ok())
-        .collect()
+    let mut clusters = vec![];
+    clusters.resize(len, 0);
+    let mut id = 1;
+    for m in cluster_re.find_iter(text.as_bytes()) {
+        let (ms, me) = m;
+        let s = byte_to_char_map[ms];
+        let e = byte_to_char_map[me];
+        for i in s..e {
+            clusters[i] = id;
+        }
+        id += 1;
+    }
+    clusters
 }
 
 pub fn load_wordlist(path: &Path) -> io::Result<Vec<String>> {
@@ -1007,7 +993,7 @@ mod tests {
     fn test_thai_cluster_rules() {
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai_cluster_rules.txt"));
         let cluster_re = super::load_cluster_rules(&path).unwrap();
-        let clusters = cluster_re.find_iter("มาการ์").collect::<Vec<_>>();        
+        let clusters = cluster_re.find_iter("มาการ์".as_bytes()).collect::<Vec<_>>();        
         assert_eq!(clusters.len(), 3);
     }
 
@@ -1015,22 +1001,18 @@ mod tests {
     fn test_find_clusters() {
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai_cluster_rules.txt"));
         let cluster_re = super::load_cluster_rules(&path).unwrap();
-        let clusters = find_clusters("กาแกกก์A", &cluster_re);
-        assert_eq!(clusters.len(), 2);
-        assert_eq!(clusters[0], TextRange {s:0, e:2});
-        assert_eq!(clusters[1], TextRange {s:2, e:7});
+        let clusters = find_clusters("กาแกกก์A", &cluster_re, 8);
+        assert_eq!(clusters, vec![1,1,2,2,2,2,2,0]);
     }
 
     #[test]
     fn test_wordcut_with_clusters() {
-        let text = "กาแกกก์แมกาก";
+        let text = "แมวแฐแกกก์มา";
         let cluster_path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai_cluster_rules.txt"));
         let cluster_re = super::load_cluster_rules(&cluster_path).unwrap();
-        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/words_th.txt"));
         let dict = super::load_dict(&path);
         let wordcut = Wordcut::new_with_cluster_re(dict.unwrap(), cluster_re);
-        assert_eq!(wordcut.put_delimiters(text, "|||"), String::from("กา|||แกกก์แม|||กาก"));
-
+        assert_eq!(wordcut.put_delimiters(text, "|||"), String::from("แมว|||แฐแกกก์|||มา"));
     }
-
 }
