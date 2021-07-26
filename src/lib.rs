@@ -5,15 +5,20 @@ extern crate prefixtree;
 extern crate serde_derive;
 
 use self::prefixtree::{prefix_tree_from_str, PrefixTree};
-use regex_automata::Regex;
-use std::collections::HashSet;
+use fancy_regex::Regex;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
+use std::iter::Peekable;
 use std::path::Path;
 use thiserror::Error;
 
 pub type Dict = PrefixTree<char, bool>;
+
+lazy_static! {
+    static ref DEFAULT_THAI_SPLIT_RE: Regex =
+        Regex::new("[\r\t\n ]+|[A-Za-z]+|[0-9]+|[๐-๙]+").unwrap();
+}
 
 #[derive(Error, Debug)]
 pub enum WordcutError {
@@ -35,11 +40,10 @@ pub enum EdgeType {
     Init,
     Dict,
     Unk,
-    Punc,
-    Latin,
+    Pat,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Edge {
     pub w: usize,
     pub unk: usize,
@@ -89,99 +93,6 @@ impl Edge {
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum State {
-    Init,
-    Pat,
-    PatFinal,
-    NonPat,
-    NonPatFinal,
-}
-
-type CharPredicate = dyn Fn(char) -> bool;
-
-pub struct PatEdgeBuilder {
-    i: usize,
-    pub start: usize,
-    state: State,
-    is_pat_char: Box<CharPredicate>,
-    etype: EdgeType,
-}
-
-impl PatEdgeBuilder {
-    pub fn new(is_pat_char: Box<CharPredicate>, etype: EdgeType) -> PatEdgeBuilder {
-        PatEdgeBuilder {
-            start: 0,
-            i: 0,
-            state: State::Init,
-            is_pat_char: is_pat_char,
-            etype: etype,
-        }
-    }
-
-    fn to_text_state(&mut self, nch: Option<char>) -> State {
-        match nch {
-            Some(_nch) => {
-                if (self.is_pat_char)(_nch) {
-                    State::NonPatFinal
-                } else {
-                    State::NonPat
-                }
-            }
-            None => State::NonPatFinal,
-        }
-    }
-
-    fn to_space_state(&mut self, nch: Option<char>) -> State {
-        match nch {
-            Some(_nch) => {
-                if (self.is_pat_char)(_nch) {
-                    State::Pat
-                } else {
-                    State::PatFinal
-                }
-            }
-            None => State::PatFinal,
-        }
-    }
-
-    fn to_another_state(&mut self, ch: char, nch: Option<char>) -> State {
-        if (self.is_pat_char)(ch) {
-            self.to_space_state(nch)
-        } else {
-            self.to_text_state(nch)
-        }
-    }
-
-    pub fn transit(&mut self, ch: char, nch: Option<char>) {
-        match self.state {
-            State::Init => {
-                self.start = self.i;
-                self.state = self.to_another_state(ch, nch)
-            }
-            State::NonPat => {
-                self.state = self.to_another_state(ch, nch);
-            }
-            State::NonPatFinal => {
-                self.start = self.i;
-                self.state = self.to_space_state(nch);
-            }
-            State::PatFinal => {
-                self.start = self.i;
-                self.state = self.to_text_state(nch)
-            }
-            State::Pat => {
-                self.state = self.to_another_state(ch, nch);
-            }
-        };
-        self.i += 1;
-    }
-
-    pub fn is_pat_final(&self) -> bool {
-        self.state == State::PatFinal
-    }
-}
-
 pub trait EdgeBuilder {
     fn build(&mut self, context: &EdgeBuildingContext, path: &[Edge]) -> Option<Edge>;
 }
@@ -193,60 +104,6 @@ pub struct EdgeBuildingContext<'a> {
     pub ch: char,
     pub left_boundary: usize,
     pub best_edge: Option<Edge>,
-}
-
-impl EdgeBuilder for PatEdgeBuilder {
-    fn build(&mut self, context: &EdgeBuildingContext, path: &[Edge]) -> Option<Edge> {
-        let next_char = if context.i + 1 == context.text.len() {
-            None
-        } else {
-            Some(context.text[context.i + 1])
-        };
-        self.transit(context.ch, next_char);
-        if self.is_pat_final() {
-            let source = path[self.start];
-            Some(Edge {
-                p: self.start,
-                etype: self.etype,
-                w: source.w + 1,
-                unk: source.unk,
-            })
-        } else {
-            None
-        }
-    }
-}
-
-fn is_latin(ch: char) -> bool {
-    (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
-}
-
-pub fn create_latin_edge_builder() -> PatEdgeBuilder {
-    PatEdgeBuilder::new(Box::new(is_latin), EdgeType::Latin)
-}
-
-lazy_static! {
-    static ref PUNC_SET: HashSet<char> = {
-        let mut m = HashSet::new();
-        m.insert(' ');
-        m.insert('\n');
-        m.insert('\t');
-        m.insert('\r');
-        m.insert('"');
-        m.insert('(');
-        m.insert(')');
-        m.insert('“');
-        m.insert('”');
-        m
-    };
-}
-
-fn is_punc(ch: char) -> bool {
-    PUNC_SET.contains(&ch)
-}
-
-pub fn create_punc_edge_builder() -> PatEdgeBuilder {
-    PatEdgeBuilder::new(Box::new(is_punc), EdgeType::Punc)
 }
 
 pub struct UnkEdgeBuilder {}
@@ -366,14 +223,80 @@ impl<'a> EdgeBuilder for DictEdgeBuilder<'a> {
     }
 }
 
-fn build_path_with_clusters(dict: &Dict, clusters: &[usize], text: &[char]) -> Vec<Edge> {
-    let mut builders: Vec<Box<dyn EdgeBuilder>> = vec![
-        Box::new(DictEdgeBuilder::new(dict)),
-        Box::new(create_latin_edge_builder()),
-        Box::new(create_punc_edge_builder()),
-        Box::new(UnkEdgeBuilder::new()),
-    ];
+pub struct RuleBasedEdgeBuilder {
+    range_peekable: Peekable<std::vec::IntoIter<TextRange>>,
+}
 
+impl RuleBasedEdgeBuilder {
+    pub fn new(byte_to_char_idx_map: &[usize], text: &str, re: &Regex) -> Self {
+        let mut ranges = vec![];
+        for m in re.find_iter(text) {
+            if let Ok(m) = m {
+                let ms = m.start();
+                let me = m.end();
+                let s = byte_to_char_idx_map[ms];
+                let e = byte_to_char_idx_map[me];
+                ranges.push(TextRange { s, e });
+            }
+        }
+        RuleBasedEdgeBuilder {
+            range_peekable: ranges.into_iter().peekable(),
+        }
+    }
+}
+
+impl EdgeBuilder for RuleBasedEdgeBuilder {
+    fn build(&mut self, context: &EdgeBuildingContext, path: &[Edge]) -> Option<Edge> {
+        loop {
+            if let Some(r) = self.range_peekable.peek() {
+                if context.i >= r.e {
+                    self.range_peekable.next();
+                } else {
+                    break;
+                }
+            } else {
+                return None;
+            }
+        }
+        if let Some(r) = self.range_peekable.peek() {
+            if r.e != context.i + 1 {
+                return None;
+            }
+            let source = dbg!(path[r.s]);
+            return Some(Edge {
+                etype: EdgeType::Pat,
+                p: r.s,
+                w: source.w + 1,
+                unk: source.unk,
+            });
+        } else {
+            return None;
+        }
+    }
+}
+
+#[inline]
+fn does_not_break_cluster(s: usize, e: usize, text_len: usize, clusters: &[usize]) -> bool {
+    (s == 0 || clusters[s] == 0 || clusters[s] != clusters[s - 1])
+        && (e == text_len || clusters[e - 1] == 0 || clusters[e] != clusters[e - 1])
+}
+
+#[inline]
+fn should_skip_edge(edge: &Option<Edge>, i: usize, text_len: usize, clusters: &[usize]) -> bool {
+    let mut skip_edge = false;
+    if let Some(edge) = edge {
+        let s = edge.p;
+        let e = i + 1;
+        skip_edge = !edge.is_unk() && !does_not_break_cluster(s, e, text_len, clusters);
+    }
+    return skip_edge;
+}
+
+fn build_path_with_clusters(
+    mut builders: Vec<&mut dyn EdgeBuilder>,
+    clusters: &[usize],
+    text: &[char],
+) -> Vec<Edge> {
     let mut path = vec![];
     path.push(Edge {
         w: 0,
@@ -395,77 +318,19 @@ fn build_path_with_clusters(dict: &Dict, clusters: &[usize], text: &[char]) -> V
         context.ch = text[i];
         context.i = i;
         context.best_edge = None;
-
         for builder in &mut builders {
             let edge = builder.build(&context, &path);
-            let mut skip_edge = false;
-            if let Some(edge) = edge {
-                let s = edge.p;
-                let e = i + 1;
-                skip_edge = !edge.is_unk()
-                    && !((s == 0 || clusters[s] == 0 || clusters[s] != clusters[s - 1])
-                        && (e == text_len
-                            || clusters[e - 1] == 0
-                            || clusters[e] != clusters[e - 1]));
-            }
-            if !skip_edge && Edge::better(&edge, &context.best_edge) {
+            if !should_skip_edge(&edge, i, text_len, clusters)
+                && Edge::better(&edge, &context.best_edge)
+            {
                 context.best_edge = edge
             }
         }
-
         path.push(context.best_edge.unwrap());
-
         if !context.best_edge.unwrap().is_unk() {
             context.left_boundary = i + 1;
         }
     }
-
-    return path;
-}
-
-pub fn build_path(dict: &Dict, text: &Vec<char>) -> Vec<Edge> {
-    let mut builders: Vec<Box<dyn EdgeBuilder>> = vec![
-        Box::new(DictEdgeBuilder::new(dict)),
-        Box::new(create_latin_edge_builder()),
-        Box::new(create_punc_edge_builder()),
-        Box::new(UnkEdgeBuilder::new()),
-    ];
-
-    let mut path = vec![];
-    path.push(Edge {
-        w: 0,
-        unk: 0,
-        p: 0,
-        etype: EdgeType::Init,
-    });
-
-    let mut context = EdgeBuildingContext {
-        text: &text,
-        i: 0,
-        ch: '\0',
-        left_boundary: 0,
-        best_edge: None,
-    };
-
-    for i in 0..text.len() {
-        context.ch = text[i];
-        context.i = i;
-        context.best_edge = None;
-
-        for builder in &mut builders {
-            let edge = builder.build(&context, &path);
-            if Edge::better(&edge, &context.best_edge) {
-                context.best_edge = edge
-            }
-        }
-
-        path.push(context.best_edge.unwrap());
-
-        if !context.best_edge.unwrap().is_unk() {
-            context.left_boundary = i + 1
-        }
-    }
-
     return path;
 }
 
@@ -499,32 +364,28 @@ impl<'a> DagEdgeBuilder for DictEdgeBuilder<'a> {
     }
 }
 
-impl DagEdgeBuilder for PatEdgeBuilder {
-    fn build_dag_edges(&mut self, context: &EdgeBuildingContext) -> Vec<DagEdge> {
-        let next_char = if context.i + 1 == context.text.len() {
-            None
-        } else {
-            Some(context.text[context.i + 1])
-        };
-        self.transit(context.ch, next_char);
-        if self.is_pat_final() {
-            vec![DagEdge {
-                s: self.start,
-                e: context.i + 1,
-                etype: self.etype,
-            }]
-        } else {
-            vec![]
-        }
-    }
-}
+// impl DagEdgeBuilder for PatEdgeBuilder {
+//     fn build_dag_edges(&mut self, context: &EdgeBuildingContext) -> Vec<DagEdge> {
+//         let next_char = if context.i + 1 == context.text.len() {
+//             None
+//         } else {
+//             Some(context.text[context.i + 1])
+//         };
+//         self.transit(context.ch, next_char);
+//         if self.is_pat_final() {
+//             vec![DagEdge {
+//                 s: self.start,
+//                 e: context.i + 1,
+//                 etype: self.etype,
+//             }]
+//         } else {
+//             vec![]
+//         }
+//     }
+// }
 
 pub fn build_dag(dict: &Dict, text: &Vec<char>) -> Dag {
-    let mut builders: Vec<Box<dyn DagEdgeBuilder>> = vec![
-        Box::new(DictEdgeBuilder::new(dict)),
-        Box::new(create_latin_edge_builder()),
-        Box::new(create_punc_edge_builder()),
-    ];
+    let mut builders: Vec<Box<dyn DagEdgeBuilder>> = vec![Box::new(DictEdgeBuilder::new(dict))];
 
     let mut dag = Vec::with_capacity(text.len() + 1);
 
@@ -628,10 +489,10 @@ pub fn path_to_str_vec(path: &[Edge], text: &[char]) -> Vec<String> {
     return str_vec;
 }
 
-#[derive(Clone)]
 pub struct Wordcut {
     dict: Dict,
     cluster_re: Option<Regex>,
+    split_re: Regex,
 }
 
 impl Wordcut {
@@ -639,6 +500,7 @@ impl Wordcut {
         Wordcut {
             dict,
             cluster_re: None,
+            split_re: DEFAULT_THAI_SPLIT_RE.clone(),
         }
     }
 
@@ -646,21 +508,31 @@ impl Wordcut {
         Wordcut {
             dict,
             cluster_re: Some(cluster_re),
+            split_re: DEFAULT_THAI_SPLIT_RE.clone(),
         }
     }
 
     #[inline]
     pub fn build_path(&self, text: &str, text_chars: &[char]) -> Vec<Edge> {
-        match &self.cluster_re {
-            Some(cluster_re) => {
-                let clusters = find_clusters(text, cluster_re, text_chars.len());
-                build_path_with_clusters(&self.dict, &clusters, text_chars)
-            }
-            None => {
-                let text_chars: Vec<char> = text.chars().collect();
-                build_path(&self.dict, &text_chars)
-            }
-        }
+        let byte_to_char_idx_map = create_byte_to_char_idx_map(text);
+        let mut dict_edge_builder = DictEdgeBuilder::new(&self.dict);
+        let mut unk_edge_builder = UnkEdgeBuilder::new();
+        let mut rule_based_edge_builder =
+            RuleBasedEdgeBuilder::new(&byte_to_char_idx_map, text, &self.split_re);
+        let builders: Vec<&mut dyn EdgeBuilder> = vec![
+            &mut dict_edge_builder,
+            &mut unk_edge_builder,
+            &mut rule_based_edge_builder,
+        ];
+
+        let clusters = if let Some(cluster_re) = &self.cluster_re {
+            find_clusters(text, &byte_to_char_idx_map, cluster_re, text_chars.len())
+        } else {
+            let mut clusters = vec![];
+            clusters.resize(text_chars.len() + 1, 0);
+            clusters
+        };
+        build_path_with_clusters(builders, &clusters, text_chars)
     }
 
     #[allow(dead_code)]
@@ -692,7 +564,7 @@ impl Wordcut {
     }
 }
 
-pub fn find_clusters(text: &str, cluster_re: &Regex, len: usize) -> Vec<usize> {
+pub fn create_byte_to_char_idx_map(text: &str) -> Vec<usize> {
     let mut byte_to_char_map = vec![];
     let mut i = 0;
     for b in text.as_bytes() {
@@ -704,17 +576,29 @@ pub fn find_clusters(text: &str, cluster_re: &Regex, len: usize) -> Vec<usize> {
         }
     }
     byte_to_char_map.push(i);
+    return byte_to_char_map;
+}
+
+pub fn find_clusters(
+    text: &str,
+    byte_to_char_idx_map: &[usize],
+    cluster_re: &Regex,
+    len: usize,
+) -> Vec<usize> {
     let mut clusters = vec![];
     clusters.resize(len, 0);
     let mut id = 1;
-    for m in cluster_re.find_iter(text.as_bytes()) {
-        let (ms, me) = m;
-        let s = byte_to_char_map[ms];
-        let e = byte_to_char_map[me];
-        for i in s..e {
-            clusters[i] = id;
+    for m in cluster_re.find_iter(text) {
+        if let Ok(m) = m {
+            let ms = m.start();
+            let me = m.end();
+            let s = byte_to_char_idx_map[ms];
+            let e = byte_to_char_idx_map[me];
+            for i in s..e {
+                clusters[i] = id;
+            }
+            id += 1;
         }
-        id += 1;
     }
     clusters
 }
@@ -896,81 +780,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dag_punc() {
-        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
-        let dict = super::load_dict(&path);
-        let dag = super::build_dag(&dict.unwrap(), &"กา กา".chars().collect());
-        let expected = vec![
-            vec![DagEdge {
-                s: 0,
-                e: 0,
-                etype: EdgeType::Init,
-            }], // 0
-            vec![DagEdge {
-                s: 0,
-                e: 1,
-                etype: EdgeType::Unk,
-            }], // 1
-            vec![DagEdge {
-                s: 0,
-                e: 2,
-                etype: EdgeType::Dict,
-            }], // 2
-            vec![DagEdge {
-                s: 2,
-                e: 3,
-                etype: EdgeType::Punc,
-            }], // 3
-            vec![DagEdge {
-                s: 3,
-                e: 4,
-                etype: EdgeType::Unk,
-            }], // 4
-            vec![DagEdge {
-                s: 3,
-                e: 5,
-                etype: EdgeType::Dict,
-            }], // 5
-        ];
-        assert_eq!(dag, expected);
-    }
-
-    #[test]
-    fn test_dag_latin() {
-        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
-        let dict = super::load_dict(&path);
-        let dag = super::build_dag(&dict.unwrap(), &"กาAB".chars().collect());
-        let expected = vec![
-            vec![DagEdge {
-                s: 0,
-                e: 0,
-                etype: EdgeType::Init,
-            }], // 0
-            vec![DagEdge {
-                s: 0,
-                e: 1,
-                etype: EdgeType::Unk,
-            }], // 1
-            vec![DagEdge {
-                s: 0,
-                e: 2,
-                etype: EdgeType::Dict,
-            }], // 2
-            vec![DagEdge {
-                s: 2,
-                e: 3,
-                etype: EdgeType::Unk,
-            }], // 3
-            vec![DagEdge {
-                s: 2,
-                e: 4,
-                etype: EdgeType::Latin,
-            }], // 4
-        ];
-        assert_eq!(dag, expected);
-    }
-
-    #[test]
     fn test_dag_empty() {
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
         let dict = super::load_dict(&path);
@@ -1005,18 +814,25 @@ mod tests {
             "/data/thai_cluster_rules.txt"
         ));
         let cluster_re = super::load_cluster_rules(&path).unwrap();
-        let clusters = cluster_re.find_iter("มาการ์".as_bytes()).collect::<Vec<_>>();
-        assert_eq!(clusters.len(), 3);
+        let clusters = cluster_re.find_iter("มาการ์").collect::<Vec<_>>();
+        assert_eq!(clusters.len(), 2);
     }
 
     #[test]
     fn test_find_clusters() {
+        let text = "กาแกกก์A";
         let path = super::Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/data/thai_cluster_rules.txt"
         ));
         let cluster_re = super::load_cluster_rules(&path).unwrap();
-        let clusters = find_clusters("กาแกกก์A", &cluster_re, 8);
+        let byte_to_char_idx_map = create_byte_to_char_idx_map(text);
+        let clusters = find_clusters(
+            text,
+            &byte_to_char_idx_map,
+            &cluster_re,
+            text.chars().count(),
+        );
         assert_eq!(clusters, vec![1, 1, 2, 2, 2, 2, 2, 0]);
     }
 
@@ -1034,6 +850,131 @@ mod tests {
         assert_eq!(
             wordcut.put_delimiters(text, "|||"),
             String::from("แมว|||แฐแกกก์|||มา")
+        );
+    }
+
+    #[test]
+    fn test_wordcut_with_clusters2() {
+        let text = "มีรีเควสต์อะไร";
+        let cluster_path = super::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/thai_cluster_rules.txt"
+        ));
+        let cluster_re = super::load_cluster_rules(&cluster_path).unwrap();
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/words_th.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new_with_cluster_re(dict.unwrap(), cluster_re);
+        assert_eq!(
+            wordcut.put_delimiters(text, "|||"),
+            String::from("มี|||รี|||เค|||วสต์|||อะไร")
+        );
+    }
+
+    #[test]
+    fn test_rule_based_edge_builder() {
+        let text = "  ABก";
+        let text_chars: Vec<char> = text.chars().collect();
+        let byte_to_char_idx_map = create_byte_to_char_idx_map(text);
+        let mut builder =
+            RuleBasedEdgeBuilder::new(&byte_to_char_idx_map, text, &DEFAULT_THAI_SPLIT_RE);
+        let mut path = vec![];
+        path.push(Edge {
+            w: 10,
+            unk: 20,
+            p: 0,
+            etype: EdgeType::Init,
+        });
+        let edge = builder.build(
+            &EdgeBuildingContext {
+                text: &text_chars,
+                i: 0,
+                ch: '\0',
+                left_boundary: 0,
+                best_edge: None,
+            },
+            &path,
+        );
+        assert!(edge.is_none());
+        path.push(Edge {
+            w: 20,
+            unk: 30,
+            p: 0,
+            etype: EdgeType::Unk,
+        });
+
+        let edge = builder.build(
+            &EdgeBuildingContext {
+                text: &text_chars,
+                i: 1,
+                ch: '\0',
+                left_boundary: 0,
+                best_edge: None,
+            },
+            &path,
+        );
+        assert!(edge.is_some());
+        path.push(Edge {
+            w: 30,
+            unk: 40,
+            p: 0,
+            etype: EdgeType::Pat,
+        });
+
+        let edge = builder.build(
+            &EdgeBuildingContext {
+                text: &text_chars,
+                i: 2,
+                ch: '\0',
+                left_boundary: 0,
+                best_edge: None,
+            },
+            &path,
+        );
+        assert!(edge.is_none());
+        path.push(Edge {
+            w: 50,
+            unk: 60,
+            p: 0,
+            etype: EdgeType::Unk,
+        });
+
+        let edge = builder.build(
+            &EdgeBuildingContext {
+                text: &text_chars,
+                i: 3,
+                ch: '\0',
+                left_boundary: 0,
+                best_edge: None,
+            },
+            &path,
+        );
+        assert!(edge.is_some());
+        let edge = edge.unwrap();
+        assert_eq!(
+            edge,
+            Edge {
+                w: 31,
+                unk: 40,
+                p: 2,
+                etype: EdgeType::Pat
+            }
+        );
+    }
+
+    #[test]
+    fn test_wordcut_with_split_rules() {
+        let text = "AB   X";
+        let cluster_path = super::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/thai_cluster_rules.txt"
+        ));
+        let cluster_re = super::load_cluster_rules(&cluster_path).unwrap();
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/words_th.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new_with_cluster_re(dict.unwrap(), cluster_re);
+        assert_eq!(
+            wordcut.put_delimiters(text, "|||"),
+            String::from("AB|||   |||X")
         );
     }
 }
