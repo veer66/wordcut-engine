@@ -262,7 +262,7 @@ impl EdgeBuilder for RuleBasedEdgeBuilder {
             if r.e != context.i + 1 {
                 return None;
             }
-            let source = dbg!(path[r.s]);
+            let source = path[r.s];
             return Some(Edge {
                 etype: EdgeType::Pat,
                 p: r.s,
