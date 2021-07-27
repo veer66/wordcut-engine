@@ -5,9 +5,9 @@ extern crate prefixtree;
 extern crate serde_derive;
 
 use self::prefixtree::{prefix_tree_from_str, PrefixTree};
+use regex_automata::dense::DenseDFA;
 use regex_automata::Regex;
 use regex_automata::DFA;
-use regex_automata::dense::DenseDFA;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -693,8 +693,10 @@ pub fn load_cluster_rules(path: &Path) -> Result<RuleMatcher, WordcutError> {
     let mut builder = regex_automata::dense::Builder::new();
     builder.anchored(true);
     builder.unicode(true);
-//    let re = RuleMatcher::new(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?;
-    Ok(builder.build(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?)
+    //    let re = RuleMatcher::new(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?;
+    Ok(builder
+        .build(&rules)
+        .map_err(|_| WordcutError::CannotCompileClusterRules(rules))?)
 }
 
 #[cfg(test)]
