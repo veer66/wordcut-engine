@@ -498,7 +498,11 @@ impl Wordcut {
         }
     }
 
-    pub fn new_with_cluster_re_and_split_re(dict: Dict, cluster_re: ClusterRulesMatcher, split_re: SplitRulesMatcher) -> Wordcut {
+    pub fn new_with_cluster_re_and_split_re(
+        dict: Dict,
+        cluster_re: ClusterRulesMatcher,
+        split_re: SplitRulesMatcher,
+    ) -> Wordcut {
         Wordcut {
             dict,
             cluster_re: Some(cluster_re),
@@ -1061,7 +1065,8 @@ mod tests {
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/words_th.txt"));
         let dict = super::load_dict(&path);
         let split_re = load_split_rules(&split_path).unwrap();
-        let wordcut = Wordcut::new_with_cluster_re_and_split_re(dict.unwrap(), cluster_re, split_re);
+        let wordcut =
+            Wordcut::new_with_cluster_re_and_split_re(dict.unwrap(), cluster_re, split_re);
         assert_eq!(
             wordcut.put_delimiters(text, "|||"),
             String::from("AB|||   |||X|||(|||A|||)|||/|||12")
