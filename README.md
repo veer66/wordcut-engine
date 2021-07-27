@@ -12,6 +12,8 @@ wordcut-engine has three steps:
 
 ## Identifying clusters
 
+Identifying clusters identify which substrings that must _not_ be split.
+
 1. Wrapping regular expressions with parentheses
 
 For example,
@@ -45,3 +47,13 @@ for example,
 5. Identifying clusters following a shortest path of a DAG from step above
 
 Note: wordcut-engine does not allow a context sensitive rule, since it hurts the performance too much. Moreover, instead of longest matching, we use a DAG, and its shortest path to contraint cluster boundary by another cluster, therefore [newmm](https://github.com/PyThaiNLP/pythainlp/blob/dev/pythainlp/tokenize/newmm.py)-style context sensitive rules are not required.
+
+
+## Identifying split-DAG edges
+
+In contrary to identifying clusters, identifying split-DAG edges identify what must be split. Split-DAG edge makers, wordcut-engine has three types of split-DAG edge maker, that are:
+
+1. Dictionary-based maker
+2. Rule-based maker
+3. Default maker
+
