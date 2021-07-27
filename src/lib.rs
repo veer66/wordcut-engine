@@ -5,7 +5,9 @@ extern crate prefixtree;
 extern crate serde_derive;
 
 use self::prefixtree::{prefix_tree_from_str, PrefixTree};
-use fancy_regex::Regex;
+use regex_automata::Regex;
+use regex_automata::DFA;
+use regex_automata::dense::DenseDFA;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -14,6 +16,8 @@ use std::path::Path;
 use thiserror::Error;
 
 pub type Dict = PrefixTree<char, bool>;
+
+type RuleMatcher = DenseDFA<Vec<usize>, usize>;
 
 lazy_static! {
     static ref DEFAULT_THAI_SPLIT_RE: Regex =
@@ -230,14 +234,11 @@ pub struct RuleBasedEdgeBuilder {
 impl RuleBasedEdgeBuilder {
     pub fn new(byte_to_char_idx_map: &[usize], text: &str, re: &Regex) -> Self {
         let mut ranges = vec![];
-        for m in re.find_iter(text) {
-            if let Ok(m) = m {
-                let ms = m.start();
-                let me = m.end();
-                let s = byte_to_char_idx_map[ms];
-                let e = byte_to_char_idx_map[me];
-                ranges.push(TextRange { s, e });
-            }
+        for m in re.find_iter(text.as_bytes()) {
+            let (ms, me) = m;
+            let s = byte_to_char_idx_map[ms];
+            let e = byte_to_char_idx_map[me];
+            ranges.push(TextRange { s, e });
         }
         RuleBasedEdgeBuilder {
             range_peekable: ranges.into_iter().peekable(),
@@ -364,26 +365,6 @@ impl<'a> DagEdgeBuilder for DictEdgeBuilder<'a> {
     }
 }
 
-// impl DagEdgeBuilder for PatEdgeBuilder {
-//     fn build_dag_edges(&mut self, context: &EdgeBuildingContext) -> Vec<DagEdge> {
-//         let next_char = if context.i + 1 == context.text.len() {
-//             None
-//         } else {
-//             Some(context.text[context.i + 1])
-//         };
-//         self.transit(context.ch, next_char);
-//         if self.is_pat_final() {
-//             vec![DagEdge {
-//                 s: self.start,
-//                 e: context.i + 1,
-//                 etype: self.etype,
-//             }]
-//         } else {
-//             vec![]
-//         }
-//     }
-// }
-
 pub fn build_dag(dict: &Dict, text: &Vec<char>) -> Dag {
     let mut builders: Vec<Box<dyn DagEdgeBuilder>> = vec![Box::new(DictEdgeBuilder::new(dict))];
 
@@ -491,7 +472,7 @@ pub fn path_to_str_vec(path: &[Edge], text: &[char]) -> Vec<String> {
 
 pub struct Wordcut {
     dict: Dict,
-    cluster_re: Option<Regex>,
+    cluster_re: Option<RuleMatcher>,
     split_re: Regex,
 }
 
@@ -504,7 +485,7 @@ impl Wordcut {
         }
     }
 
-    pub fn new_with_cluster_re(dict: Dict, cluster_re: Regex) -> Wordcut {
+    pub fn new_with_cluster_re(dict: Dict, cluster_re: RuleMatcher) -> Wordcut {
         Wordcut {
             dict,
             cluster_re: Some(cluster_re),
@@ -579,26 +560,110 @@ pub fn create_byte_to_char_idx_map(text: &str) -> Vec<usize> {
     return byte_to_char_map;
 }
 
+#[derive(Debug)]
+pub struct ClusterPointer {
+    state_id: usize,
+    p: usize,
+}
+
+#[derive(Debug)]
+pub struct ClusterEdge {
+    acc_pat_len: usize,
+    unk_cnt: usize,
+    p: usize,
+    is_unk: bool,
+}
+
+pub fn find_cluster_path(dfa: &RuleMatcher, text: &str) -> Vec<ClusterEdge> {
+    let mut pointers = vec![];
+    let mut ch_i = 0;
+    let mut path = vec![];
+    let mut left_boundary = 0;
+    path.push(ClusterEdge {
+        p: 0,
+        acc_pat_len: 0,
+        unk_cnt: 0,
+        is_unk: false,
+    });
+    for ch in text.as_bytes() {
+        let mut best_edge: Option<ClusterEdge> = None;
+        pointers.push(ClusterPointer {
+            state_id: dfa.start_state(),
+            p: ch_i,
+        });
+        let mut j = 0;
+        for i in 0..pointers.len() {
+            let next_id = dfa.next_state(pointers[i].state_id, *ch);
+            if !dfa.is_dead_state(next_id) {
+                pointers[j] = ClusterPointer {
+                    state_id: next_id,
+                    p: pointers[i].p,
+                };
+                j += 1;
+                if dfa.is_match_state(next_id) {
+                    let source = &path[pointers[i].p];
+                    let edge = ClusterEdge {
+                        p: pointers[i].p,
+                        acc_pat_len: source.acc_pat_len + (ch_i - pointers[i].p + 1),
+                        unk_cnt: source.unk_cnt,
+                        is_unk: false,
+                    };
+                    if match &best_edge {
+                        Some(b_edge) => {
+                            b_edge.unk_cnt > edge.unk_cnt
+                                || (b_edge.unk_cnt == edge.unk_cnt
+                                    && b_edge.acc_pat_len < edge.acc_pat_len)
+                        }
+                        None => true,
+                    } {
+                        best_edge = Some(edge);
+                    }
+                }
+            }
+        }
+        pointers.truncate(j);
+        if best_edge.is_none() {
+            let source = &path[left_boundary];
+            best_edge = Some(ClusterEdge {
+                p: left_boundary,
+                acc_pat_len: source.acc_pat_len,
+                unk_cnt: source.unk_cnt + (ch_i - left_boundary + 1),
+                is_unk: true,
+            });
+        }
+        let best_edge = best_edge.unwrap();
+        if !best_edge.is_unk {
+            left_boundary = ch_i + 1;
+        }
+        path.push(best_edge);
+        ch_i += 1;
+    }
+    path
+}
+
 pub fn find_clusters(
     text: &str,
     byte_to_char_idx_map: &[usize],
-    cluster_re: &Regex,
+    dfa: &RuleMatcher,
     len: usize,
 ) -> Vec<usize> {
     let mut clusters = vec![];
     clusters.resize(len, 0);
     let mut id = 1;
-    for m in cluster_re.find_iter(text) {
-        if let Ok(m) = m {
-            let ms = m.start();
-            let me = m.end();
-            let s = byte_to_char_idx_map[ms];
-            let e = byte_to_char_idx_map[me];
+    let path = find_cluster_path(dfa, text);
+    let mut me = path.len() - 1;
+    while me > 0 {
+        let edge = &path[me];
+        let ms = edge.p;
+        let s = byte_to_char_idx_map[ms];
+        let e = byte_to_char_idx_map[me];
+        if !edge.is_unk {
             for i in s..e {
                 clusters[i] = id;
             }
             id += 1;
         }
+        me = ms;
     }
     clusters
 }
@@ -615,18 +680,21 @@ pub fn load_dict(path: &Path) -> io::Result<Dict> {
     return Ok(create_prefix_tree(&wordlist));
 }
 
-pub fn load_cluster_rules(path: &Path) -> Result<Regex, WordcutError> {
+pub fn load_cluster_rules(path: &Path) -> Result<RuleMatcher, WordcutError> {
     let f = File::open(path)
         .map_err(|_| WordcutError::CannotOpenClusterRulesAt(path.to_string_lossy().to_string()))?;
     let f = io::BufReader::new(f);
     let mut rules = vec![];
     for line in f.lines() {
         let line = line.map_err(|_| WordcutError::CannotReadClusterRule)?;
-        rules.push(line.trim().to_string());
+        rules.push(format!("({})", line.trim()));
     }
     let rules = rules.join("|");
-    let re = Regex::new(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?;
-    Ok(re)
+    let mut builder = regex_automata::dense::Builder::new();
+    builder.anchored(true);
+    builder.unicode(true);
+//    let re = RuleMatcher::new(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?;
+    Ok(builder.build(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?)
 }
 
 #[cfg(test)]
@@ -808,17 +876,6 @@ mod tests {
     }
 
     #[test]
-    fn test_thai_cluster_rules() {
-        let path = super::Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/data/thai_cluster_rules.txt"
-        ));
-        let cluster_re = super::load_cluster_rules(&path).unwrap();
-        let clusters = cluster_re.find_iter("มาการ์").collect::<Vec<_>>();
-        assert_eq!(clusters.len(), 2);
-    }
-
-    #[test]
     fn test_find_clusters() {
         let text = "กาแกกก์A";
         let path = super::Path::new(concat!(
@@ -833,7 +890,7 @@ mod tests {
             &cluster_re,
             text.chars().count(),
         );
-        assert_eq!(clusters, vec![1, 1, 2, 2, 2, 2, 2, 0]);
+        assert_eq!(clusters, vec![2, 2, 1, 1, 1, 1, 1, 0]);
     }
 
     #[test]
@@ -976,5 +1033,17 @@ mod tests {
             wordcut.put_delimiters(text, "|||"),
             String::from("AB|||   |||X")
         );
+    }
+
+    #[test]
+    fn test_find_clusters_path() {
+        let path = super::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/thai_cluster_rules.txt"
+        ));
+        let cluster_re = super::load_cluster_rules(&path).unwrap();
+        let cluster_path = find_cluster_path(&cluster_re, "เกียำ");
+        assert_eq!(cluster_path.len(), 16);
+        assert_eq!(cluster_path[15].p, 9);
     }
 }
