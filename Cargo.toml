@@ -1,13 +1,13 @@
 [package]
 name = "wordcut-engine"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2018"
 authors = ["Vee Satayamas <5ssgdxltv@relay.firefox.com>"]
 description = "Word segmentation/breaking library"
 homepage = "https://github.com/veer66/wordcut-engine"
 repository = "https://github.com/veer66/wordcut-engine"
 keywords = ["text", "nlp", "library"]
-license = "LGPL-3.0"
+license = "Apache-2.0"
 
 [dependencies]
 prefixtree = "0.1.3"
