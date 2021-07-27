@@ -57,4 +57,14 @@ In contrary to identifying clusters, identifying split-DAG edges identify what m
 2. Rule-based maker
 3. Default maker (Unk edge builder)
 
-The dictionary-based maker traverses a prefix tree, which is particularly a trie in wordcut-engine and create an edge that matched word in the prefix tree. Rule-based maker uses [regex-automata](https://github.com/BurntSushi/regex-automata)'s Regex matcher to find longest matched substrings, and add corresponding edges to the graph. wordcut-engine removes ddges that break clusters. If there is no edge for each of character indice yet, a default maker create a edge that connected a last known boundary.
+The dictionary-based maker traverses a prefix tree, which is particularly a trie in wordcut-engine and create an edge that matched word in the prefix tree. Rule-based maker uses [regex-automata](https://github.com/BurntSushi/regex-automata)'s Regex matcher built from split rules to find longest matched substrings, and add corresponding edges to the graph. wordcut-engine removes ddges that break clusters. The example of split rules are shown below:
+
+```
+[\r\t\n ]+
+[A-Za-z]+
+[0-9]+
+[๐-๙]+
+[\(\)"'`\[\]{}\\/]
+```
+
+If there is no edge for each of character indice yet, a default maker create a edge that connected a last known boundary.
