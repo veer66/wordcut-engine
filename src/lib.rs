@@ -17,7 +17,8 @@ use thiserror::Error;
 
 pub type Dict = PrefixTree<char, bool>;
 
-type RuleMatcher = DenseDFA<Vec<usize>, usize>;
+type ClusterRulesMatcher = DenseDFA<Vec<usize>, usize>;
+type SplitRulesMatcher = Regex;
 
 lazy_static! {
     static ref DEFAULT_THAI_SPLIT_RE: Regex =
@@ -32,6 +33,10 @@ pub enum WordcutError {
     CannotReadClusterRule,
     #[error("Cannot compile cluster rules `{0}`")]
     CannotCompileClusterRules(String),
+    #[error("Cannot open split rules at `{0}`")]
+    CannotOpenSplitRulesAt(String),
+    #[error("Cannot compile split rules `{0}`")]
+    CannotCompileSplitRules(String),
 }
 
 pub fn create_prefix_tree(words: &[&str]) -> PrefixTree<char, bool> {
@@ -472,8 +477,8 @@ pub fn path_to_str_vec(path: &[Edge], text: &[char]) -> Vec<String> {
 
 pub struct Wordcut {
     dict: Dict,
-    cluster_re: Option<RuleMatcher>,
-    split_re: Regex,
+    cluster_re: Option<ClusterRulesMatcher>,
+    split_re: SplitRulesMatcher,
 }
 
 impl Wordcut {
@@ -485,11 +490,19 @@ impl Wordcut {
         }
     }
 
-    pub fn new_with_cluster_re(dict: Dict, cluster_re: RuleMatcher) -> Wordcut {
+    pub fn new_with_cluster_re(dict: Dict, cluster_re: ClusterRulesMatcher) -> Wordcut {
         Wordcut {
             dict,
             cluster_re: Some(cluster_re),
             split_re: DEFAULT_THAI_SPLIT_RE.clone(),
+        }
+    }
+
+    pub fn new_with_cluster_re_and_split_re(dict: Dict, cluster_re: ClusterRulesMatcher, split_re: SplitRulesMatcher) -> Wordcut {
+        Wordcut {
+            dict,
+            cluster_re: Some(cluster_re),
+            split_re,
         }
     }
 
@@ -574,7 +587,7 @@ pub struct ClusterEdge {
     is_unk: bool,
 }
 
-pub fn find_cluster_path(dfa: &RuleMatcher, text: &str) -> Vec<ClusterEdge> {
+pub fn find_cluster_path(dfa: &ClusterRulesMatcher, text: &str) -> Vec<ClusterEdge> {
     let mut pointers = vec![];
     let mut ch_i = 0;
     let mut path = vec![];
@@ -644,7 +657,7 @@ pub fn find_cluster_path(dfa: &RuleMatcher, text: &str) -> Vec<ClusterEdge> {
 pub fn find_clusters(
     text: &str,
     byte_to_char_idx_map: &[usize],
-    dfa: &RuleMatcher,
+    dfa: &ClusterRulesMatcher,
     len: usize,
 ) -> Vec<usize> {
     let mut clusters = vec![];
@@ -680,7 +693,7 @@ pub fn load_dict(path: &Path) -> io::Result<Dict> {
     return Ok(create_prefix_tree(&wordlist));
 }
 
-pub fn load_cluster_rules(path: &Path) -> Result<RuleMatcher, WordcutError> {
+pub fn load_cluster_rules(path: &Path) -> Result<ClusterRulesMatcher, WordcutError> {
     let f = File::open(path)
         .map_err(|_| WordcutError::CannotOpenClusterRulesAt(path.to_string_lossy().to_string()))?;
     let f = io::BufReader::new(f);
@@ -693,10 +706,22 @@ pub fn load_cluster_rules(path: &Path) -> Result<RuleMatcher, WordcutError> {
     let mut builder = regex_automata::dense::Builder::new();
     builder.anchored(true);
     builder.unicode(true);
-    //    let re = RuleMatcher::new(&rules).map_err(|_| WordcutError::CannotCompileClusterRules(rules))?;
     Ok(builder
         .build(&rules)
         .map_err(|_| WordcutError::CannotCompileClusterRules(rules))?)
+}
+
+pub fn load_split_rules(path: &Path) -> Result<SplitRulesMatcher, WordcutError> {
+    let f = File::open(path)
+        .map_err(|_| WordcutError::CannotOpenSplitRulesAt(path.to_string_lossy().to_string()))?;
+    let f = io::BufReader::new(f);
+    let mut rules = vec![];
+    for line in f.lines() {
+        let line = line.map_err(|_| WordcutError::CannotReadClusterRule)?;
+        rules.push(format!("({})", line.trim()));
+    }
+    let rules = rules.join("|");
+    Ok(Regex::new(&rules).map_err(|_| WordcutError::CannotCompileSplitRules(rules))?)
 }
 
 #[cfg(test)]
@@ -1022,18 +1047,24 @@ mod tests {
 
     #[test]
     fn test_wordcut_with_split_rules() {
-        let text = "AB   X";
+        let text = "AB   X(A)/12";
         let cluster_path = super::Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/data/thai_cluster_rules.txt"
         ));
+        let split_path = super::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/thai_split_rules.txt"
+        ));
+
         let cluster_re = super::load_cluster_rules(&cluster_path).unwrap();
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/words_th.txt"));
         let dict = super::load_dict(&path);
-        let wordcut = Wordcut::new_with_cluster_re(dict.unwrap(), cluster_re);
+        let split_re = load_split_rules(&split_path).unwrap();
+        let wordcut = Wordcut::new_with_cluster_re_and_split_re(dict.unwrap(), cluster_re, split_re);
         assert_eq!(
             wordcut.put_delimiters(text, "|||"),
-            String::from("AB|||   |||X")
+            String::from("AB|||   |||X|||(|||A|||)|||/|||12")
         );
     }
 
