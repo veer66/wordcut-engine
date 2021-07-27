@@ -1,0 +1,9 @@
+[package]
+name = "wordcut-engine-example"
+version = "0.0.1"
+edition = "2018"
+authors = ["Vee Satayamas <5ssgdxltv@relay.firefox.com>"]
+license = "Apache-2.0"
+
+[dependencies]
+wordcut-engine = { path = ".." }
