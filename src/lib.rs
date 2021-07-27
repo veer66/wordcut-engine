@@ -437,7 +437,7 @@ pub fn path_to_ranges(path: &[Edge]) -> Vec<TextRange> {
     while e > 0 {
         let edge = &path[e];
         let s = edge.p;
-        ranges.push(TextRange { s: s, e: e });
+        ranges.push(TextRange { s, e });
         e = s;
     }
     ranges.reverse();
