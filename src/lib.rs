@@ -22,7 +22,7 @@ type SplitRulesMatcher = Regex;
 
 lazy_static! {
     static ref DEFAULT_THAI_SPLIT_RE: Regex =
-        Regex::new("[\r\t\n ]+|[A-Za-z]+|[0-9]+|[๐-๙]+").unwrap();
+        Regex::new("[\r\t\n ]+|[A-Za-z]+|[0-9]+|[๐-๙]+|“").unwrap();
 }
 
 #[derive(Error, Debug)]
@@ -332,16 +332,15 @@ fn build_path_with_clusters(
         context.ch = text[i];
         context.i = i;
         context.best_edge = None;
-	dbg!(i);
         for builder in &mut builders {
-            let edge = dbg!(builder.build(&context, &path));
+            let edge = builder.build(&context, &path);
             if !should_skip_edge(&edge, i, text_len, clusters)
                 && Edge::better(&edge, &context.best_edge)
             {
                 context.best_edge = edge
             }
         }
-        path.push(dbg!(context.best_edge.unwrap()));
+        path.push(context.best_edge.unwrap());
         if !context.best_edge.unwrap().is_unk() {
             context.left_boundary = i + 1;
         }
@@ -829,7 +828,15 @@ mod tests {
         let wordcut = Wordcut::new(dict.unwrap());
 	assert_eq!(wordcut.put_delimiters("แแ  ยย", "|"), String::from("แแ|  |ยย"))
     }
-    
+
+    #[test]
+    fn test_wordcut_with_unicode_quote() {
+	let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new(dict.unwrap());
+	assert_eq!(wordcut.put_delimiters("“ฆกากา”", "|"), String::from("“|ฆ|กา|กา|”"))
+    }
+
     #[test]
     fn test_dag() {
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
