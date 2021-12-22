@@ -66,6 +66,14 @@ impl Edge {
     }
 
     pub fn better_than(&self, o: &Edge) -> bool {
+	if self.etype == EdgeType::Pat && o.etype == EdgeType::Unk {
+	    return true;
+	}
+	
+	if self.etype == EdgeType::Unk && o.etype == EdgeType::Pat {
+	    return false;
+	}
+	
         if self.unk < o.unk {
             return true;
         }
@@ -324,15 +332,16 @@ fn build_path_with_clusters(
         context.ch = text[i];
         context.i = i;
         context.best_edge = None;
+	dbg!(i);
         for builder in &mut builders {
-            let edge = builder.build(&context, &path);
+            let edge = dbg!(builder.build(&context, &path));
             if !should_skip_edge(&edge, i, text_len, clusters)
                 && Edge::better(&edge, &context.best_edge)
             {
                 context.best_edge = edge
             }
         }
-        path.push(context.best_edge.unwrap());
+        path.push(dbg!(context.best_edge.unwrap()));
         if !context.best_edge.unwrap().is_unk() {
             context.left_boundary = i + 1;
         }
@@ -797,6 +806,30 @@ mod tests {
         assert_eq!(wordcut.put_delimiters("กากกา", "|"), String::from("กาก|กา"))
     }
 
+    #[test]
+    fn test_wordcut_with_latin() {
+	let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new(dict.unwrap());
+	assert_eq!(wordcut.put_delimiters("ฑฑACญญ", "|"), String::from("ฑฑ|AC|ญญ"))
+    }
+
+    #[test]
+    fn test_wordcut_with_two_spaces() {
+	let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new(dict.unwrap());
+	assert_eq!(wordcut.put_delimiters("กา  มา", "|"), String::from("กา|  |มา"))
+    }
+
+    #[test]
+    fn test_wordcut_with_two_spaces_unk() {
+	let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new(dict.unwrap());
+	assert_eq!(wordcut.put_delimiters("แแ  ยย", "|"), String::from("แแ|  |ยย"))
+    }
+    
     #[test]
     fn test_dag() {
         let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/thai2words.txt"));
