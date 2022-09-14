@@ -819,6 +819,20 @@ mod tests {
             String::from("สำหรับ|ข้อ|เสนอ")
         )
     }
+    
+    #[test]
+    fn test_wordcut_with_replacer_two_occurs() {
+        let dict = super::create_prefix_tree(&["กำลัง", "ทำ", "พยายาม", "ลัง", "ให้"]);
+        let wordcut = Wordcut::new(dict);
+        let rule = r###"{"pattern": "ํา", "replacement": "ำ"}"###;
+        let rule: replacer::Rule = serde_json::from_str(rule).unwrap();
+        let imm_rules = replacer::ImmRule::from_rules(&vec![rule]).unwrap();
+        let mod_text = replacer::replace(&imm_rules, "กําลังพยายามทําให้");
+        assert_eq!(
+            wordcut.put_delimiters(&mod_text, "|"),
+            String::from("กำลัง|พยายาม|ทำ|ให้")
+        )
+    }
 
     #[test]
     fn test_wordcut_with_latin() {
