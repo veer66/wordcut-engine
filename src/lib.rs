@@ -1,4 +1,4 @@
-mod replacer;
+pub mod replacer;
 
 #[macro_use]
 extern crate lazy_static;
