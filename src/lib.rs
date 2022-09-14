@@ -1,3 +1,5 @@
+mod replacer;
+
 #[macro_use]
 extern crate lazy_static;
 extern crate prefixtree;
@@ -802,6 +804,17 @@ mod tests {
         let dict = super::load_dict(&path);
         let wordcut = Wordcut::new(dict.unwrap());
         assert_eq!(wordcut.put_delimiters("กากกา", "|"), String::from("กาก|กา"))
+    }
+
+    #[test]
+    fn test_wordcut_with_replacer() {
+	let dict = super::create_prefix_tree(&["ข้อ", "รับ", "สำหรับ", "เสนอ"]);
+        let wordcut = Wordcut::new(dict);
+	let rule = r###"{"pattern": "ํา", "replacement": "ำ"}"###;
+	let rule: replacer::Rule = serde_json::from_str(rule).unwrap();
+	let imm_rules = replacer::ImmRule::from_rules(&vec![rule]).unwrap();
+	let mod_text = replacer::replace(&imm_rules, "สําหรับข้อเสนอ");
+        assert_eq!(wordcut.put_delimiters(&mod_text, "|"), String::from("สำหรับ|ข้อ|เสนอ"))
     }
 
     #[test]
