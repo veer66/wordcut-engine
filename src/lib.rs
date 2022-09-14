@@ -808,13 +808,16 @@ mod tests {
 
     #[test]
     fn test_wordcut_with_replacer() {
-	let dict = super::create_prefix_tree(&["ข้อ", "รับ", "สำหรับ", "เสนอ"]);
+        let dict = super::create_prefix_tree(&["ข้อ", "รับ", "สำหรับ", "เสนอ"]);
         let wordcut = Wordcut::new(dict);
-	let rule = r###"{"pattern": "ํา", "replacement": "ำ"}"###;
-	let rule: replacer::Rule = serde_json::from_str(rule).unwrap();
-	let imm_rules = replacer::ImmRule::from_rules(&vec![rule]).unwrap();
-	let mod_text = replacer::replace(&imm_rules, "สําหรับข้อเสนอ");
-        assert_eq!(wordcut.put_delimiters(&mod_text, "|"), String::from("สำหรับ|ข้อ|เสนอ"))
+        let rule = r###"{"pattern": "ํา", "replacement": "ำ"}"###;
+        let rule: replacer::Rule = serde_json::from_str(rule).unwrap();
+        let imm_rules = replacer::ImmRule::from_rules(&vec![rule]).unwrap();
+        let mod_text = replacer::replace(&imm_rules, "สําหรับข้อเสนอ");
+        assert_eq!(
+            wordcut.put_delimiters(&mod_text, "|"),
+            String::from("สำหรับ|ข้อ|เสนอ")
+        )
     }
 
     #[test]

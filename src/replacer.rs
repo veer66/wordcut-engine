@@ -46,13 +46,13 @@ impl ImmRule {
 #[allow(dead_code)]
 pub fn replace(rules: &[ImmRule], text: &str) -> String {
     if rules.len() == 0 {
-	return text.to_string()
+        return text.to_string();
     }
     let mut mod_text = text.to_string();
     for rule in rules {
-	mod_text = rule.pattern.replace(&text, &rule.replacement).to_string();
+        mod_text = rule.pattern.replace(&text, &rule.replacement).to_string();
     }
-    return mod_text
+    return mod_text;
 }
 
 #[cfg(test)]
@@ -62,10 +62,10 @@ mod tests {
 
     #[test]
     fn sara_am() {
-	let rule = r###"{"pattern": "ํา", "replacement": "ำ"}"###;
-	let rule: Rule = serde_json::from_str(rule).unwrap();
-	let imm_rules = ImmRule::from_rules(&vec![rule]).unwrap();
-	let mod_text = replace(&imm_rules, "สําหรับข้อเสนอ");
-	assert_eq!(mod_text, "สำหรับข้อเสนอ");
+        let rule = r###"{"pattern": "ํา", "replacement": "ำ"}"###;
+        let rule: Rule = serde_json::from_str(rule).unwrap();
+        let imm_rules = ImmRule::from_rules(&vec![rule]).unwrap();
+        let mod_text = replace(&imm_rules, "สําหรับข้อเสนอ");
+        assert_eq!(mod_text, "สำหรับข้อเสนอ");
     }
 }
