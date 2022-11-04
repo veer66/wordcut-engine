@@ -701,7 +701,7 @@ pub fn load_wordlist(path: &Path) -> io::Result<Vec<String>> {
 }
 
 pub fn load_dict(path: &Path) -> io::Result<Dict> {
-    let wordlist = load_wordlist(path).unwrap();
+    let wordlist = load_wordlist(path)?;
     let wordlist: Vec<_> = wordlist.iter().map(|w| &w[..]).collect();
     return Ok(create_prefix_tree(&wordlist));
 }
