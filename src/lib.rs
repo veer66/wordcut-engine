@@ -819,7 +819,7 @@ mod tests {
             String::from("สำหรับ|ข้อ|เสนอ")
         )
     }
-    
+
     #[test]
     fn test_wordcut_with_replacer_two_occurs() {
         let dict = super::create_prefix_tree(&["กำลัง", "ทำ", "พยายาม", "ลัง", "ให้"]);
@@ -1037,6 +1037,20 @@ mod tests {
             wordcut.put_delimiters(text, "|||"),
             String::from("มี|||รี|||เค|||วสต์|||อะไร")
         );
+    }
+
+    #[test]
+    fn test_wordcut_khmer_cluster_basic() {
+        let text = "ឡារី";
+        let cluster_path = super::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/khmer_cluster_rules.txt"
+        ));
+        let cluster_re = super::load_cluster_rules(&cluster_path).unwrap();
+        let path = super::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/khmerdict.txt"));
+        let dict = super::load_dict(&path);
+        let wordcut = Wordcut::new_with_cluster_re(dict.unwrap(), cluster_re);
+        assert_eq!(wordcut.put_delimiters(text, "|||"), String::from("ឡា|||រី"));
     }
 
     #[test]
