@@ -56,7 +56,10 @@ pub fn replace(rules: &[ImmRule], text: &str) -> String {
     }
     let mut mod_text = text.to_string();
     for rule in rules {
-        mod_text = rule.pattern.replace_all(&text, &rule.replacement).to_string();
+        mod_text = rule
+            .pattern
+            .replace_all(&text, &rule.replacement)
+            .to_string();
     }
     return mod_text;
 }
