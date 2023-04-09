@@ -17,6 +17,39 @@ use std::iter::Peekable;
 use std::path::Path;
 use thiserror::Error;
 
+macro_rules! insert_prefix {
+    ($filename:expr) => {
+        if cfg!(feature = "onedir") {
+            Path::new(concat!("./", $filename))
+        } else {
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/", $filename))
+        }
+    };
+}
+
+macro_rules! insert_prefix_str {
+    ($filename:expr) => {
+        if cfg!(feature = "onedir") {
+            concat!("./", $filename)
+        } else {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/data/", $filename)
+        }
+    };
+}
+
+pub fn default_dict_path() -> &'static Path {
+    insert_prefix!("words_th.txt")
+}
+
+pub fn thai_cluster_path() -> Option<String> {
+    Some(insert_prefix_str!("thai_cluster_rules.txt").to_owned())
+}
+
+pub fn thai_replace_rules_path() -> Option<String> {
+    Some(insert_prefix_str!("thai-replace-rules.json").to_owned())
+}
+
+
 pub type Dict = PrefixTree<char, bool>;
 
 type ClusterRulesMatcher = DenseDFA<Vec<usize>, usize>;
