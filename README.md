@@ -1,3 +1,5 @@
+# Moved to https://codeberg.org/mekong-lang/wordcut-engine
+
 # wordcut-engine
 
 Word segmentation library in Rust
